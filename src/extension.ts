@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import OpenAI from "openai";
 import { getWebviewContent } from "./webview/commitPanel";
 import * as crypto from "crypto";
+import { spawn } from "child_process";
+import * as path from "path";
 
 interface GitChange extends vscode.SourceControlResourceState {
   uri: vscode.Uri;
@@ -21,7 +23,7 @@ interface GitRepository {
   diff(options?: { cached?: boolean }): Promise<string>;
   diffWithHEAD(path: string): Promise<string>;
   add(paths: string[]): Promise<void>;
-  apply(patch: string, path: string): Promise<void>;
+  apply(patch: string): Promise<void>;
   commit(message: string): Promise<void>;
   stage(path: string, data: string): Promise<void>;
 }
@@ -99,6 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
         // Show commit panel
         showCommitPanel(context, commitMessage, diffs);
       } catch (error: any) {
+        console.error("Error:", error);
         vscode.window.showErrorMessage(`Error: ${error.message}`);
       }
     }
@@ -194,17 +197,65 @@ async function stageFilteredChanges(
       continue;
     }
 
-    // For partial staging, we need to use the repository's index directly
-    const document = await vscode.workspace.openTextDocument(change.uri);
-    const content = document.getText();
-    const lines = content.split("\n");
-    const selectedLines = new Set(change.linesToStage);
-    const newContent = lines
-      .map((line, index) => (selectedLines.has(index + 1) ? line : ""))
-      .join("\n");
+    const linesToStage = change.linesToStage;
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+    if (!workspaceFolder) continue;
 
-    // Use add method instead of non-existent stage method
-    await repo.add([change.uri.fsPath]);
+    await new Promise<void>((resolve, reject) => {
+      const gitProcess = spawn("git", ["add", "-p", change.uri.fsPath], {
+        cwd: workspaceFolder,
+      });
+      debugger;
+
+      let hunkHeader = "";
+      let currentHunkLines: number[] = [];
+
+      gitProcess.stdout.on("data", (data) => {
+        const output = data.toString();
+        debugger;
+        // If we see a hunk header, parse it to get line numbers
+        if (output.includes("@@")) {
+          hunkHeader = output;
+          const match = output.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+          if (match) {
+            const startLine = parseInt(match[1], 10);
+            const length = match[2] ? parseInt(match[2], 10) : 1;
+            currentHunkLines = Array.from({ length }, (_, i) => startLine + i);
+          }
+        }
+
+        // Check if any lines in this hunk should be staged
+        const shouldStageHunk = currentHunkLines.some((line) =>
+          linesToStage.includes(line)
+        );
+
+        // Respond with y/n based on whether we want this hunk
+        if (output.includes("Stage this hunk")) {
+          if (shouldStageHunk) {
+            gitProcess.stdin.write("y\n");
+          } else {
+            gitProcess.stdin.write("n\n");
+          }
+        }
+
+        // If it asks to split the hunk and we only want some lines, split it
+        if (output.includes("Split into")) {
+          gitProcess.stdin.write("s\n");
+        }
+      });
+
+      gitProcess.stderr.on("data", (data) => {
+        console.error(`Git error: ${data}`);
+      });
+
+      gitProcess.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Git process exited with code ${code}`));
+        }
+      });
+    });
   }
 }
 
