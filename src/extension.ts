@@ -71,29 +71,18 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       try {
-        // Get all changes
-        const changes = repo.state.workingTreeChanges;
+        // Stage changes interactively, filtering console.logs during staging
+        await stageFilteredChanges(repo);
 
-        // Filter out console.log changes
-        const filteredChanges = await filterConsoleLogChanges(repo);
-
-        if (filteredChanges.length === 0) {
-          vscode.window.showInformationMessage(
-            "No changes to commit after filtering console.log statements"
-          );
+        // Get staged changes diff for commit message and display
+        const stagedDiff = await repo.diff({ cached: true });
+        if (!stagedDiff) {
+          vscode.window.showInformationMessage("No changes staged for commit");
           return;
         }
 
-        // Parse diffs for the webview
-        const diffs = await Promise.all(
-          filteredChanges.map(async (change) => {
-            const fileDiff = await repo.diffWithHEAD(change.uri.fsPath);
-            return parseDiff(fileDiff, change.uri.fsPath, change.type);
-          })
-        );
-
-        // Stage filtered changes
-        await stageFilteredChanges(repo, filteredChanges);
+        // Parse diffs for the webview (only staged changes)
+        const diffs = await parseStagedDiffs(repo);
 
         // Generate commit message using OpenAI
         const commitMessage = await generateCommitMessage(repo, apiKey);
@@ -110,153 +99,161 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(disposable);
 }
 
-async function filterConsoleLogChanges(
-  repo: GitRepository
-): Promise<GitChange[]> {
+async function stageFilteredChanges(repo: GitRepository): Promise<void> {
   const changes = repo.state.workingTreeChanges.map(
     (change) => change.resource
   );
-  const filteredChanges: GitChange[] = [];
 
   for (const change of changes) {
     if (!change.resourceUri) continue;
-
-    // For deleted files, include them as is
-    if ((change as GitChange).type === vscode.FileChangeType.Deleted) {
-      filteredChanges.push({
-        ...change,
-        uri: change.resourceUri,
-        linesToStage: "all",
-      } as GitChange);
-      continue;
-    }
-
     const uri = change.resourceUri;
-    const document = await vscode.workspace.openTextDocument(uri);
-    const fileDiff = await repo.diffWithHEAD(uri.fsPath);
-
-    if (!fileDiff) continue;
-
-    // Get all changed lines and filter out console.log lines
-    const changedLines = parseChangedLines(fileDiff);
-    const nonConsoleLines = changedLines.filter((lineNum) => {
-      const line = document.lineAt(lineNum - 1).text.trim();
-      return !(
-        line.startsWith("console.log(") ||
-        line.startsWith("console.error(") ||
-        line.startsWith("console.warn(") ||
-        line === ""
-      );
-    });
-
-    if (nonConsoleLines.length > 0) {
-      filteredChanges.push({
-        ...change,
-        uri: change.resourceUri,
-        linesToStage: nonConsoleLines,
-      } as GitChange);
-    }
-  }
-
-  return filteredChanges;
-}
-
-function parseChangedLines(diff: string): number[] {
-  const changedLines: number[] = [];
-  const lines = diff.split("\n");
-  let currentLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
-      if (match) {
-        currentLine = parseInt(match[1], 10);
-        continue;
-      }
-    }
-
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      changedLines.push(currentLine);
-    }
-
-    if (!line.startsWith("-") && !line.startsWith("\\")) {
-      currentLine++;
-    }
-  }
-
-  return changedLines;
-}
-
-async function stageFilteredChanges(
-  repo: GitRepository,
-  changes: GitChange[]
-): Promise<void> {
-  for (const change of changes) {
-    if (change.linesToStage === "all") {
-      await repo.add([change.uri.fsPath]);
-      continue;
-    }
-
-    const linesToStage = change.linesToStage;
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
     if (!workspaceFolder) continue;
 
-    await new Promise<void>((resolve, reject) => {
-      const gitProcess = spawn("git", ["add", "-p", change.uri.fsPath], {
-        cwd: workspaceFolder,
-      });
-      debugger;
+    // For deleted files, stage them directly
+    if ((change as GitChange).type === vscode.FileChangeType.Deleted) {
+      await repo.add([uri.fsPath]);
+      continue;
+    }
 
-      let hunkHeader = "";
-      let currentHunkLines: number[] = [];
+    // Get the diff for the current file
+    const diff = await repo.diffWithHEAD(uri.fsPath);
+    if (!diff) continue;
 
-      gitProcess.stdout.on("data", (data) => {
-        const output = data.toString();
-        debugger;
-        // If we see a hunk header, parse it to get line numbers
-        if (output.includes("@@")) {
-          hunkHeader = output;
-          const match = output.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
-          if (match) {
-            const startLine = parseInt(match[1], 10);
-            const length = match[2] ? parseInt(match[2], 10) : 1;
-            currentHunkLines = Array.from({ length }, (_, i) => startLine + i);
-          }
-        }
+    // Create filtered patch content
+    const filteredPatch = createFilteredPatch(diff, uri.fsPath);
 
-        // Check if any lines in this hunk should be staged
-        const shouldStageHunk = currentHunkLines.some((line) =>
-          linesToStage.includes(line)
-        );
+    // Create temporary patch file
+    const tempPatchPath = path.join(
+      workspaceFolder,
+      `.temp-${Date.now()}.patch`
+    );
+    await vscode.workspace.fs.writeFile(
+      vscode.Uri.file(tempPatchPath),
+      Buffer.from(filteredPatch)
+    );
 
-        // Respond with y/n based on whether we want this hunk
-        if (output.includes("Stage this hunk")) {
-          if (shouldStageHunk) {
-            gitProcess.stdin.write("y\n");
+    try {
+      // Apply the patch directly to the index using git apply --cached
+      await new Promise<void>((resolve, reject) => {
+        const apply = spawn("git", ["apply", "--cached", tempPatchPath], {
+          cwd: workspaceFolder,
+        });
+
+        apply.on("error", reject);
+        apply.on("exit", (code) => {
+          if (code === 0) {
+            resolve();
           } else {
-            gitProcess.stdin.write("n\n");
+            reject(new Error(`git apply failed with code ${code}`));
           }
-        }
-
-        // If it asks to split the hunk and we only want some lines, split it
-        if (output.includes("Split into")) {
-          gitProcess.stdin.write("s\n");
-        }
+        });
       });
-
-      gitProcess.stderr.on("data", (data) => {
-        console.error(`Git error: ${data}`);
-      });
-
-      gitProcess.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Git process exited with code ${code}`));
-        }
-      });
-    });
+    } catch (error) {
+      throw error;
+    } finally {
+      // Clean up temp patch file
+      await vscode.workspace.fs.delete(vscode.Uri.file(tempPatchPath));
+    }
   }
+}
+
+function createFilteredPatch(diff: string, filePath: string): string {
+  const lines = diff.split("\n");
+  const filteredLines: string[] = [];
+  let currentHunk: string[] = [];
+  let oldLineCount = 0;
+  let newLineCount = 0;
+  let skippedLines = 0;
+
+  for (const line of lines) {
+    // Keep file headers
+    if (
+      line.startsWith("diff ") ||
+      line.startsWith("index ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("+++ ")
+    ) {
+      filteredLines.push(line);
+      continue;
+    }
+
+    // Start of a new hunk
+    if (line.startsWith("@@")) {
+      // Process previous hunk if it exists
+      if (currentHunk.length > 0) {
+        const headerMatch = currentHunk[0].match(
+          /@@ -(\d+),(\d+) \+(\d+),(\d+) @@/
+        );
+        if (headerMatch) {
+          const oldStart = parseInt(headerMatch[1]);
+          const newStart = parseInt(headerMatch[3]);
+          // Adjust the new line count by subtracting skipped console.log lines
+          const newFinalCount = parseInt(headerMatch[4]) - skippedLines;
+          currentHunk[0] = `@@ -${oldStart},${headerMatch[2]} +${newStart},${newFinalCount} @@`;
+        }
+        filteredLines.push(...currentHunk);
+      }
+
+      // Reset counters for new hunk
+      currentHunk = [line];
+      skippedLines = 0;
+      continue;
+    }
+
+    // Process line in current hunk
+    if (currentHunk.length > 0) {
+      if (line.startsWith("+")) {
+        const codeLine = line.substring(1).trim();
+        if (
+          codeLine.startsWith("console.log(") ||
+          codeLine.startsWith("console.error(") ||
+          codeLine.startsWith("console.warn(")
+        ) {
+          // Count skipped console.log lines
+          skippedLines++;
+          continue;
+        } else {
+          currentHunk.push(line);
+        }
+      } else {
+        currentHunk.push(line);
+      }
+    }
+  }
+
+  // Process the last hunk
+  if (currentHunk.length > 0) {
+    const headerMatch = currentHunk[0].match(
+      /@@ -(\d+),(\d+) \+(\d+),(\d+) @@/
+    );
+    if (headerMatch) {
+      const oldStart = parseInt(headerMatch[1]);
+      const newStart = parseInt(headerMatch[3]);
+      const newFinalCount = parseInt(headerMatch[4]) - skippedLines;
+      currentHunk[0] = `@@ -${oldStart},${headerMatch[2]} +${newStart},${newFinalCount} @@`;
+    }
+    filteredLines.push(...currentHunk);
+  }
+
+  return filteredLines.join("\n");
+}
+
+async function parseStagedDiffs(repo: GitRepository) {
+  const diffs = [];
+  for (const change of repo.state.workingTreeChanges) {
+    const fileDiff = await repo.diff({ cached: true });
+    if (fileDiff) {
+      diffs.push(
+        parseDiff(
+          fileDiff,
+          change.resource.resourceUri.fsPath,
+          (change.resource as GitChange).type
+        )
+      );
+    }
+  }
+  return diffs;
 }
 
 async function generateCommitMessage(
