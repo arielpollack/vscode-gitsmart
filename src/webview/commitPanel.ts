@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { Uri } from "vscode";
 
 interface DiffLine {
   type: "added" | "removed" | "context";
@@ -18,16 +19,26 @@ interface FileDiff {
 }
 
 export function getWebviewContent(
+  panel: vscode.WebviewPanel,
   commitMessage: string,
   diffs: FileDiff[],
-  nonce: string
+  extensionUri: Uri
 ): string {
+  // Generate a new nonce for each webview update
+  const nonce = getNonce();
+
+  const scriptUri = panel.webview.asWebviewUri(
+    Uri.joinPath(extensionUri, "src", "webview", "commitPanel.js")
+  );
+
   return `<!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src ${
+    panel.webview.cspSource
+  };">
         <title>Smart Commit</title>
         <style nonce="${nonce}">
             body {
@@ -150,31 +161,9 @@ export function getWebviewContent(
             ${generateDiffHtml(diffs)}
         </div>
         
-        <button class="commit-button" onclick="approve()">Approve and Commit</button>
+        <button class="commit-button" id="approveButton">Approve and Commit</button>
 
-        <script nonce="${nonce}">
-            const vscode = acquireVsCodeApi();
-            
-            function toggleDiff(fileId) {
-                const content = document.getElementById('diff-content-' + fileId);
-                const button = document.getElementById('collapse-button-' + fileId);
-                if (content.style.display === 'none') {
-                    content.style.display = 'block';
-                    button.textContent = '−';
-                } else {
-                    content.style.display = 'none';
-                    button.textContent = '+';
-                }
-            }
-            
-            function approve() {
-                const commitMessage = document.getElementById('commitMessage').value;
-                vscode.postMessage({
-                    command: 'approve',
-                    commitMessage: commitMessage
-                });
-            }
-        </script>
+        <script src="${scriptUri}"></script>
     </body>
     </html>`;
 }
@@ -187,9 +176,9 @@ function generateDiffHtml(diffs: FileDiff[]): string {
 
       return `
         <div class="file-diff">
-            <div class="file-header" onclick="toggleDiff(${index})">
+            <div class="file-header">
                 <div class="file-path">
-                    <button class="collapse-button" id="collapse-button-${index}">−</button>
+                    <button class="collapse-button" id="collapse-button-${index}" onclick="toggleDiff(${index}, event)">−</button>
                     ${fileChangeText} ${escapeHtml(diff.filePath)}
                 </div>
                 <div class="diff-stats">${diffStats}</div>
@@ -268,4 +257,14 @@ function escapeHtml(unsafe: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function getNonce() {
+  let text = "";
+  const possible =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
 }

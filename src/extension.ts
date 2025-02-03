@@ -302,7 +302,13 @@ function showCommitPanel(
   // Generate a nonce for CSP
   const nonce = crypto.randomBytes(16).toString("base64");
 
-  commitPanel.webview.html = getWebviewContent(commitMessage, diffs, nonce);
+  const content = getWebviewContent(
+    commitPanel,
+    commitMessage,
+    diffs,
+    context.extensionUri
+  );
+  commitPanel.webview.html = content;
 }
 
 function parseDiff(
