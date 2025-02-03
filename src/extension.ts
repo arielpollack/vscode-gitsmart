@@ -82,12 +82,6 @@ export function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        // Stage filtered changes
-        await stageFilteredChanges(repo, filteredChanges);
-
-        // Generate commit message using OpenAI
-        const commitMessage = await generateCommitMessage(repo, apiKey);
-
         // Parse diffs for the webview
         const diffs = await Promise.all(
           filteredChanges.map(async (change) => {
@@ -95,6 +89,12 @@ export function activate(context: vscode.ExtensionContext) {
             return parseDiff(fileDiff, change.uri.fsPath, change.type);
           })
         );
+
+        // Stage filtered changes
+        await stageFilteredChanges(repo, filteredChanges);
+
+        // Generate commit message using OpenAI
+        const commitMessage = await generateCommitMessage(repo, apiKey);
 
         // Show commit panel
         showCommitPanel(context, commitMessage, diffs);
@@ -114,7 +114,7 @@ async function filterConsoleLogChanges(
     (change) => change.resource
   );
   const filteredChanges: GitChange[] = [];
-  debugger;
+
   for (const change of changes) {
     if (!change.resourceUri) continue;
 
@@ -313,12 +313,22 @@ function parseDiff(
   const hunks = [];
   const lines = diff.split("\n");
   let currentHunk: any = null;
+  let currentLineNumber = 0;
 
   for (const line of lines) {
+    // Skip file header lines
+    if (line.startsWith("---") || line.startsWith("+++")) {
+      continue;
+    }
+
     if (line.startsWith("@@")) {
       if (currentHunk) {
         hunks.push(currentHunk);
       }
+      // Parse the hunk header to get the starting line number
+      const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      currentLineNumber = match ? parseInt(match[1], 10) : 0;
+
       currentHunk = {
         header: line,
         lines: [],
@@ -332,24 +342,24 @@ function parseDiff(
       currentHunk.lines.push({
         type: "added",
         content: line.substring(1),
-        lineNumber: currentHunk.lines.length + 1,
+        lineNumber: currentLineNumber++,
       });
     } else if (line.startsWith("-")) {
       currentHunk.lines.push({
         type: "removed",
         content: line.substring(1),
-        lineNumber: currentHunk.lines.length + 1,
+        lineNumber: currentLineNumber, // Don't increment for removed lines
       });
     } else if (!line.startsWith("\\")) {
       currentHunk.lines.push({
         type: "context",
-        content: line,
-        lineNumber: currentHunk.lines.length + 1,
+        content: line.substring(1), // Remove the space at the start of context lines
+        lineNumber: currentLineNumber++,
       });
     }
   }
 
-  if (currentHunk) {
+  if (currentHunk && currentHunk.lines.length > 0) {
     hunks.push(currentHunk);
   }
 
