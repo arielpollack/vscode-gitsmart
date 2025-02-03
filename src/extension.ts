@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import OpenAI from "openai";
 import { getWebviewContent } from "./webview/commitPanel";
-import * as crypto from "crypto";
 import { spawn } from "child_process";
 import * as path from "path";
 
@@ -346,9 +345,6 @@ function showCommitPanel(
       context.subscriptions
     );
   }
-
-  // Generate a nonce for CSP
-  const nonce = crypto.randomBytes(16).toString("base64");
 
   const content = getWebviewContent(
     commitPanel,
