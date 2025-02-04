@@ -260,13 +260,11 @@ function generateDiffHtml(diffs: FileDiff[]): string {
     .join("");
 }
 
-function getFileChangeText(type: vscode.FileChangeType): string {
+function getFileChangeText(type: number): string {
   switch (type) {
-    case vscode.FileChangeType.Changed:
-      return "Modified:";
-    case vscode.FileChangeType.Deleted:
+    case 6:
       return "Deleted:";
-    case vscode.FileChangeType.Created:
+    case 7:
       return "Added:";
     default:
       return "Changed:";

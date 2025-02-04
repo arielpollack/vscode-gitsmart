@@ -93,7 +93,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const diffs = await parseStagedDiffs(repo);
-
         const commitMessage = await generateCommitMessage(
           repo,
           settings.openaiApiKey
@@ -257,20 +256,43 @@ function createFilteredPatch(diff: string, filePath: string): string {
 }
 
 async function parseStagedDiffs(repo: GitRepository) {
+  // Get all staged changes at once
+  const stagedDiff = await repo.diff(true);
+  if (!stagedDiff) {
+    return [];
+  }
+
+  // Split the diff by file
+  const fileRegex = /^diff --git a\/(.*?) b\/(.*?)$/m;
+  const fileDiffs = stagedDiff.split("diff --git").filter(Boolean);
+
   const diffs = [];
-  for (const change of repo.state.workingTreeChanges) {
-    const fileDiff = await repo.diff(true);
-    if (fileDiff) {
+  for (const fileDiff of fileDiffs) {
+    const fullDiff = "diff --git" + fileDiff;
+    const match = fileRegex.exec(fullDiff);
+    if (match) {
+      const filePath = match[2]; // Use the 'b' path as it represents the new file
+      const fullFilePath = path.join(
+        vscode.workspace.workspaceFolders?.[0].uri.fsPath || "",
+        filePath
+      );
       diffs.push(
-        parseDiff(
-          fileDiff,
-          change.resource.resourceUri.fsPath,
-          (change.resource as GitChange).type
-        )
+        parseDiff(fullDiff, fullFilePath, getFileChangeType(fullDiff))
       );
     }
   }
+
   return diffs;
+}
+
+// Helper function to determine file change type
+function getFileChangeType(diff: string): number {
+  if (diff.includes("new file mode")) {
+    return 7; // Untracked/new file
+  } else if (diff.includes("deleted file mode")) {
+    return 6; // Deleted file
+  }
+  return 1; // Modified file
 }
 
 async function generateCommitMessage(
