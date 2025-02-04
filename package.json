@@ -40,6 +40,11 @@
             "^\\s*debugger;"
           ],
           "description": "Regular expressions for lines to filter out during staging (e.g., debug statements)"
+        },
+        "gitsmart.systemMessageEnhancement": {
+          "type": "string",
+          "default": "",
+          "description": "Additional instructions to enhance the base system message when generating commit messages with OpenAI."
         }
       }
     }

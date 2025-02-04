@@ -19,7 +19,7 @@ interface GitRepository {
   state: {
     workingTreeChanges: { resource: vscode.SourceControlResourceState }[];
   };
-  diff(options?: { cached?: boolean }): Promise<string>;
+  diff(cached?: boolean): Promise<string>;
   diffWithHEAD(path: string): Promise<string>;
   add(paths: string[]): Promise<void>;
   apply(patch: string): Promise<void>;
@@ -30,6 +30,7 @@ interface GitRepository {
 interface GitSmartConfig {
   openaiApiKey: string;
   filterPatterns: string[];
+  systemMessageEnhancement: string;
 }
 
 let commitPanel: vscode.WebviewPanel | undefined;
@@ -48,6 +49,8 @@ export function activate(context: vscode.ExtensionContext) {
           "^\\s*console\\.(log|error|warn)\\(",
           "^\\s*debugger;",
         ],
+        systemMessageEnhancement:
+          config.get<string>("systemMessageEnhancement") || "",
       };
 
       if (!settings.openaiApiKey) {
@@ -81,25 +84,21 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       try {
-        // Stage changes interactively, filtering console.logs during staging
         await stageFilteredChanges(repo);
 
-        // Get staged changes diff for commit message and display
-        const stagedDiff = await repo.diff({ cached: true });
+        const stagedDiff = await repo.diff(true);
         if (!stagedDiff) {
           vscode.window.showInformationMessage("No changes staged for commit");
           return;
         }
 
-        // Parse diffs for the webview (only staged changes)
         const diffs = await parseStagedDiffs(repo);
 
-        // Generate commit message using OpenAI
         const commitMessage = await generateCommitMessage(
           repo,
           settings.openaiApiKey
         );
-        // Show commit panel
+
         showCommitPanel(context, commitMessage, diffs);
       } catch (error: any) {
         console.error("Error:", error);
@@ -260,7 +259,7 @@ function createFilteredPatch(diff: string, filePath: string): string {
 async function parseStagedDiffs(repo: GitRepository) {
   const diffs = [];
   for (const change of repo.state.workingTreeChanges) {
-    const fileDiff = await repo.diff({ cached: true });
+    const fileDiff = await repo.diff(true);
     if (fileDiff) {
       diffs.push(
         parseDiff(
@@ -279,9 +278,16 @@ async function generateCommitMessage(
   apiKey: string
 ): Promise<string> {
   const openai = new OpenAI({ apiKey });
+  const config = vscode.workspace.getConfiguration("gitsmart");
+  const baseSystemMessage =
+    "You are a helpful assistant that generates concise and descriptive git commit messages based on code changes. Follow conventional commits format.";
+  const enhancement = config.get<string>("systemMessageEnhancement") || "";
+  const systemMessage = enhancement
+    ? `${baseSystemMessage}\n\n${enhancement}`
+    : baseSystemMessage;
 
   try {
-    const diff = await repo.diff({ cached: true });
+    const diff = await repo.diff(true);
 
     if (!diff) {
       return "feat: update codebase";
@@ -292,8 +298,7 @@ async function generateCommitMessage(
       messages: [
         {
           role: "system",
-          content:
-            "You are a helpful assistant that generates concise and descriptive git commit messages based on code changes. Follow conventional commits format.",
+          content: systemMessage,
         },
         {
           role: "user",
