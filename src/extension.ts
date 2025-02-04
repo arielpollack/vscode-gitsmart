@@ -330,21 +330,66 @@ async function generateCommitMessage(
   repo: GitRepository,
   apiKey: string
 ): Promise<string> {
-  const openai = new OpenAI({ apiKey });
-  const config = vscode.workspace.getConfiguration("gitsmart");
-  const baseSystemMessage =
-    "You are a helpful assistant that generates concise and descriptive git commit messages based on code changes. Follow conventional commits format.";
-  const enhancement = config.get<string>("systemMessageEnhancement") || "";
-  const systemMessage = enhancement
-    ? `${baseSystemMessage}\n\n${enhancement}`
-    : baseSystemMessage;
+  const diff = await repo.diff(true);
+  if (!diff) {
+    return "feat: update codebase";
+  }
 
+  // Try VS Code's built-in language model first
   try {
-    const diff = await repo.diff(true);
+    const [model] = await vscode.lm.selectChatModels({ family: "gpt-4o" });
 
-    if (!diff) {
-      return "feat: update codebase";
+    if (model) {
+      const config = vscode.workspace.getConfiguration("gitsmart");
+      const baseSystemMessage =
+        "You are a helpful assistant that generates concise and descriptive git commit messages based on code changes. Follow conventional commits format. Return ONLY the commit message without any markdown formatting.";
+      const enhancement = config.get<string>("systemMessageEnhancement") || "";
+      const systemMessage = enhancement
+        ? `${baseSystemMessage}\n\n${enhancement}`
+        : baseSystemMessage;
+
+      const messages = [
+        vscode.LanguageModelChatMessage.User(systemMessage),
+        vscode.LanguageModelChatMessage.User(
+          `Generate a commit message for the following changes:\n\n${diff}`
+        ),
+      ];
+
+      const response = await model.sendRequest(
+        messages,
+        {},
+        new vscode.CancellationTokenSource().token
+      );
+      let commitMessage = "";
+
+      // Collect the streaming response
+      for await (const fragment of response.text) {
+        commitMessage += fragment;
+      }
+
+      // Remove any markdown formatting (like backticks)
+      commitMessage = commitMessage.replace(/`/g, "").trim();
+      return commitMessage || "feat: update codebase";
     }
+  } catch (err) {
+    if (err instanceof vscode.LanguageModelError) {
+      console.log("VS Code Language Model error:", err.message, err.code);
+    } else {
+      console.log("Error using VS Code Language Model:", err);
+    }
+    // Fall through to OpenAI if VS Code's language model fails
+  }
+
+  // Fallback to OpenAI
+  try {
+    const openai = new OpenAI({ apiKey });
+    const config = vscode.workspace.getConfiguration("gitsmart");
+    const baseSystemMessage =
+      "You are a helpful assistant that generates concise and descriptive git commit messages based on code changes. Follow conventional commits format.";
+    const enhancement = config.get<string>("systemMessageEnhancement") || "";
+    const systemMessage = enhancement
+      ? `${baseSystemMessage}\n\n${enhancement}`
+      : baseSystemMessage;
 
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
