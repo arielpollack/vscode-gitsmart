@@ -22,6 +22,14 @@
         "title": "GitSmart: Stage Changes"
       }
     ],
+    "keybindings": [
+      {
+        "command": "gitsmart.stageChanges",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s",
+        "when": "editorTextFocus"
+      }
+    ],
     "configuration": {
       "title": "GitSmart",
       "properties": {
