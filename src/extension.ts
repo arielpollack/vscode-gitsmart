@@ -6,7 +6,7 @@ import * as path from "path";
 
 interface GitChange extends vscode.SourceControlResourceState {
   uri: vscode.Uri;
-  type: vscode.FileChangeType;
+  type: number;
   linesToStage: number[] | "all";
 }
 
@@ -35,6 +35,7 @@ interface GitSmartConfig {
 let commitPanel: vscode.WebviewPanel | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+  console.log("GitSmart extension is now active");
 
   let disposable = vscode.commands.registerCommand(
     "gitsmart.stageChanges",
@@ -44,9 +45,8 @@ export function activate(context: vscode.ExtensionContext) {
       const settings: GitSmartConfig = {
         openaiApiKey: config.get<string>("openaiApiKey") || "",
         filterPatterns: config.get<string[]>("filterPatterns") || [
-          "console\\.log\\(",
-          "console\\.error\\(",
-          "console\\.warn\\(",
+          "^\\s*console\\.(log|error|warn)\\(",
+          "^\\s*debugger;",
         ],
       };
 
@@ -122,8 +122,9 @@ async function stageFilteredChanges(repo: GitRepository): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
     if (!workspaceFolder) continue;
 
-    // For deleted files, stage them directly
-    if ((change as GitChange).type === vscode.FileChangeType.Deleted) {
+    // For deleted or added files, stage them directly
+    // 6 => deleted, 7 => untracked
+    if ([6, 7].includes((change as GitChange).type)) {
       await repo.add([uri.fsPath]);
       continue;
     }
@@ -173,9 +174,8 @@ async function stageFilteredChanges(repo: GitRepository): Promise<void> {
 function createFilteredPatch(diff: string, filePath: string): string {
   const config = vscode.workspace.getConfiguration("gitsmart");
   const patterns = config.get<string[]>("filterPatterns") || [
-    "console\\.log\\(",
-    "console\\.error\\(",
-    "console\\.warn\\(",
+    "^\\s*console\\.(log|error|warn)\\(",
+    "^\\s*debugger;",
   ];
 
   const filterRegexes = patterns.map((pattern) => new RegExp(pattern));

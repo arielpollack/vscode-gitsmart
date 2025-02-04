@@ -36,9 +36,8 @@
             "type": "string"
           },
           "default": [
-            "console\\.log\\(",
-            "console\\.error\\(",
-            "console\\.warn\\(",
+            "^\\s*console\\.(log|error|warn)\\(",
+            "^\\s*debugger;"
           ],
           "description": "Regular expressions for lines to filter out during staging (e.g., debug statements)"
         }
