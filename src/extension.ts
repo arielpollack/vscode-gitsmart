@@ -109,6 +109,36 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(disposable);
 }
 
+async function isTextFile(uri: vscode.Uri): Promise<boolean> {
+  try {
+    // First check if VSCode recognizes it as a text document
+    const languageId =
+      vscode.window.activeTextEditor?.document.languageId ||
+      vscode.workspace.textDocuments.find(
+        (doc) => doc.uri.toString() === uri.toString()
+      )?.languageId;
+
+    if (languageId) {
+      return true;
+    }
+
+    // If the file isn't open, try to detect based on file content
+    const buffer = await vscode.workspace.fs.readFile(uri);
+
+    // Try to decode the first chunk of the file as UTF-8
+    try {
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      decoder.decode(buffer.slice(0, 8192)); // Check first 8KB
+      return true;
+    } catch {
+      return false;
+    }
+  } catch (error) {
+    console.error(`Error checking if ${uri.fsPath} is a text file:`, error);
+    return false;
+  }
+}
+
 async function stageFilteredChanges(repo: GitRepository): Promise<void> {
   const changes = repo.state.workingTreeChanges.map(
     (change) => change.resource
@@ -122,7 +152,8 @@ async function stageFilteredChanges(repo: GitRepository): Promise<void> {
 
     // For deleted or added files, stage them directly
     // 6 => deleted, 7 => untracked
-    if ([6, 7].includes((change as GitChange).type)) {
+    const isText = await isTextFile(uri);
+    if ([6, 7].includes((change as GitChange).type) || !isText) {
       await repo.add([uri.fsPath]);
       continue;
     }
@@ -427,6 +458,16 @@ function parseDiff(
   filePath: string,
   type: vscode.FileChangeType
 ) {
+  // Check if it's a binary file
+  if (diff.includes("Binary files") || diff.includes("GIT binary patch")) {
+    return {
+      filePath,
+      type,
+      hunks: [],
+      isBinary: true,
+    };
+  }
+
   const hunks = [];
   const lines = diff.split("\n");
   let currentHunk: any = null;
@@ -464,13 +505,13 @@ function parseDiff(
     if (line.startsWith("+")) {
       currentHunk.lines.push({
         type: "added",
-        content: line.substring(1),
+        content: line,
         lineNumber: currentLineNumber++,
       });
     } else if (line.startsWith("-")) {
       currentHunk.lines.push({
         type: "removed",
-        content: line.substring(1),
+        content: line,
         lineNumber: currentLineNumber, // Don't increment for removed lines
       });
     } else if (!line.startsWith("\\")) {

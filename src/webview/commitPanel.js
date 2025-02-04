@@ -6,7 +6,7 @@ class CommitPanel {
 
   initializeEventListeners() {
     // Handle collapse/expand
-    document.querySelectorAll(".collapse-button").forEach((button) => {
+    document.querySelectorAll(".file-header").forEach((button) => {
       button.addEventListener("click", (e) => this.handleToggleDiff(e));
     });
 
@@ -25,7 +25,7 @@ class CommitPanel {
     event.stopPropagation();
     const fileDiv = event.target.closest(".file-diff");
     const content = fileDiv.querySelector(".diff-content");
-    const button = event.target;
+    const button = fileDiv.querySelector(".collapse-button");
 
     const isExpanded = content.style.display !== "none";
     content.style.display = isExpanded ? "none" : "block";

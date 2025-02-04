@@ -16,6 +16,7 @@ interface FileDiff {
     lines: DiffLine[];
   }[];
   type: vscode.FileChangeType;
+  isBinary?: boolean;
 }
 
 export function getWebviewContent(
@@ -216,13 +217,22 @@ function generateDiffHtml(diffs: FileDiff[]): string {
 
       return `
         <div class="file-diff">
-            <div class="file-header">
+            <div class="file-header" id="file-header-${index}">
                 <div class="file-path">
-                    <button class="collapse-button" id="collapse-button-${index}" onclick="toggleDiff(${index}, event)">−</button>
+                    ${
+                      diff.isBinary
+                        ? ""
+                        : `<button class="collapse-button" id="collapse-button-${index}">−</button>`
+                    }
                     ${fileChangeText} ${escapeHtml(diff.filePath)}
+                    ${diff.isBinary ? " <em>(Binary file)</em>" : ""}
                 </div>
-                <div class="diff-stats">${diffStats}</div>
+                <div class="diff-stats">${diff.isBinary ? "" : diffStats}</div>
             </div>
+            ${
+              diff.isBinary
+                ? ""
+                : `
             <div class="diff-content" id="diff-content-${index}">
                 ${diff.hunks
                   .map(
@@ -230,12 +240,6 @@ function generateDiffHtml(diffs: FileDiff[]): string {
                     <div class="hunk-header">${escapeHtml(hunk.header)}</div>
                     ${hunk.lines
                       .map((line) => {
-                        const prefix =
-                          line.type === "added"
-                            ? "+"
-                            : line.type === "removed"
-                            ? "-"
-                            : " ";
                         const lineClass =
                           line.type === "added"
                             ? "line-added"
@@ -245,16 +249,17 @@ function generateDiffHtml(diffs: FileDiff[]): string {
                         return `
                         <div class="diff-line ${lineClass}">
                             <span class="line-number">${line.lineNumber}</span>
-                            <span class="line-content">${prefix}${escapeHtml(
-                          line.content
-                        )}</span>
+                            <span class="line-content">${escapeHtml(
+                              line.content
+                            )}</span>
                         </div>`;
                       })
                       .join("")}
                 `
                   )
                   .join("")}
-            </div>
+            </div>`
+            }
         </div>`;
     })
     .join("");
