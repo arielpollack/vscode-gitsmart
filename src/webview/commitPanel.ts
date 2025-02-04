@@ -39,7 +39,7 @@ export function getWebviewContent(
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src ${
     panel.webview.cspSource
   };">
-        <title>Smart Commit</title>
+        <title>GitSmart</title>
         <style nonce="${nonce}">
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
@@ -150,6 +150,43 @@ export function getWebviewContent(
                 padding: 4px 8px;
                 font-style: italic;
             }
+            .button-container {
+                display: flex;
+                gap: 10px;
+                margin-top: 20px;
+            }
+            .decline-button {
+                background-color: var(--vscode-errorForeground);
+                color: var(--vscode-button-foreground);
+                border: none;
+                padding: 10px 20px;
+                cursor: pointer;
+                font-size: 14px;
+                border-radius: 4px;
+            }
+            .decline-button:hover {
+                opacity: 0.8;
+            }
+            .action-button {
+                border: none;
+                padding: 10px 20px;
+                cursor: pointer;
+                font-size: 14px;
+                border-radius: 4px;
+                color: var(--vscode-button-foreground);
+            }
+            .action-button:hover {
+                opacity: 0.8;
+            }
+            .action-button.approve {
+                background-color: var(--vscode-button-background);
+            }
+            .action-button.approve:hover {
+                background-color: var(--vscode-button-hoverBackground);
+            }
+            .action-button.decline {
+                background-color: var(--vscode-errorForeground);
+            }
         </style>
     </head>
     <body>
@@ -161,7 +198,10 @@ export function getWebviewContent(
             ${generateDiffHtml(diffs)}
         </div>
         
-        <button class="commit-button" id="approveButton">Approve and Commit</button>
+        <div class="button-container">
+            <button class="action-button approve" id="approveButton">Approve and Commit</button>
+            <button class="action-button decline" id="declineButton">Decline and Reset</button>
+        </div>
 
         <script src="${scriptUri}"></script>
     </body>

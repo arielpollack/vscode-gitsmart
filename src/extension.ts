@@ -27,19 +27,30 @@ interface GitRepository {
   stage(path: string, data: string): Promise<void>;
 }
 
+interface GitSmartConfig {
+  openaiApiKey: string;
+  filterPatterns: string[];
+}
+
 let commitPanel: vscode.WebviewPanel | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log("Smart Commit extension is now active");
 
   let disposable = vscode.commands.registerCommand(
-    "smart-commit.createCommit",
+    "gitsmart.stageChanges",
     async () => {
-      // Check for API key first
-      const config = vscode.workspace.getConfiguration("smartCommit");
-      const apiKey = config.get<string>("openaiApiKey");
+      // Update config retrieval
+      const config = vscode.workspace.getConfiguration("gitsmart");
+      const settings: GitSmartConfig = {
+        openaiApiKey: config.get<string>("openaiApiKey") || "",
+        filterPatterns: config.get<string[]>("filterPatterns") || [
+          "console\\.log\\(",
+          "console\\.error\\(",
+          "console\\.warn\\(",
+        ],
+      };
 
-      if (!apiKey) {
+      if (!settings.openaiApiKey) {
         const setKeyAction = "Set API Key";
         const result = await vscode.window.showErrorMessage(
           "OpenAI API key is not configured. Please set it in the extension settings.",
@@ -49,7 +60,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (result === setKeyAction) {
           await vscode.commands.executeCommand(
             "workbench.action.openSettings",
-            "smartCommit.openaiApiKey"
+            "gitsmart.openaiApiKey"
           );
         }
         return;
@@ -84,8 +95,10 @@ export function activate(context: vscode.ExtensionContext) {
         const diffs = await parseStagedDiffs(repo);
 
         // Generate commit message using OpenAI
-        const commitMessage = await generateCommitMessage(repo, apiKey);
-
+        const commitMessage = await generateCommitMessage(
+          repo,
+          settings.openaiApiKey
+        );
         // Show commit panel
         showCommitPanel(context, commitMessage, diffs);
       } catch (error: any) {
@@ -158,11 +171,18 @@ async function stageFilteredChanges(repo: GitRepository): Promise<void> {
 }
 
 function createFilteredPatch(diff: string, filePath: string): string {
+  const config = vscode.workspace.getConfiguration("gitsmart");
+  const patterns = config.get<string[]>("filterPatterns") || [
+    "console\\.log\\(",
+    "console\\.error\\(",
+    "console\\.warn\\(",
+  ];
+
+  const filterRegexes = patterns.map((pattern) => new RegExp(pattern));
+
   const lines = diff.split("\n");
   const filteredLines: string[] = [];
   let currentHunk: string[] = [];
-  let oldLineCount = 0;
-  let newLineCount = 0;
   let skippedLines = 0;
 
   for (const line of lines) {
@@ -187,7 +207,6 @@ function createFilteredPatch(diff: string, filePath: string): string {
         if (headerMatch) {
           const oldStart = parseInt(headerMatch[1]);
           const newStart = parseInt(headerMatch[3]);
-          // Adjust the new line count by subtracting skipped console.log lines
           const newFinalCount = parseInt(headerMatch[4]) - skippedLines;
           currentHunk[0] = `@@ -${oldStart},${headerMatch[2]} +${newStart},${newFinalCount} @@`;
         }
@@ -204,12 +223,12 @@ function createFilteredPatch(diff: string, filePath: string): string {
     if (currentHunk.length > 0) {
       if (line.startsWith("+")) {
         const codeLine = line.substring(1).trim();
-        if (
-          codeLine.startsWith("console.log(") ||
-          codeLine.startsWith("console.error(") ||
-          codeLine.startsWith("console.warn(")
-        ) {
-          // Count skipped console.log lines
+        // Check if line matches any of the filter patterns
+        const shouldFilter = filterRegexes.some((regex) =>
+          regex.test(codeLine)
+        );
+
+        if (shouldFilter) {
           skippedLines++;
           continue;
         } else {
@@ -293,7 +312,7 @@ async function generateCommitMessage(
 }
 
 interface WebviewMessage {
-  command: "approve";
+  command: "approve" | "decline";
   commitMessage: string;
 }
 
@@ -306,8 +325,8 @@ function showCommitPanel(
     commitPanel.reveal(vscode.ViewColumn.One);
   } else {
     commitPanel = vscode.window.createWebviewPanel(
-      "smartCommit",
-      "Smart Commit",
+      "gitsmart",
+      "GitSmart",
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -318,18 +337,39 @@ function showCommitPanel(
     // Handle messages from the webview
     commitPanel.webview.onDidReceiveMessage(
       async (message: WebviewMessage) => {
+        const gitExtension =
+          vscode.extensions.getExtension<GitAPI>("vscode.git");
+        if (!gitExtension) return;
+
+        const api = gitExtension.exports.getAPI(1);
+        const repo = api.repositories[0];
+
         if (message.command === "approve") {
-          const gitExtension =
-            vscode.extensions.getExtension<GitAPI>("vscode.git");
-          if (!gitExtension) return;
-
-          const api = gitExtension.exports.getAPI(1);
-          const repo = api.repositories[0];
-
           await repo.commit(message.commitMessage);
           commitPanel?.dispose();
           vscode.window.showInformationMessage(
             "Changes committed successfully!"
+          );
+        } else if (message.command === "decline") {
+          // Reset the index (unstage all changes)
+          await new Promise<void>((resolve, reject) => {
+            const git = spawn("git", ["reset"], {
+              cwd: vscode.workspace.workspaceFolders?.[0].uri.fsPath,
+            });
+
+            git.on("error", reject);
+            git.on("exit", (code) => {
+              if (code === 0) {
+                resolve();
+              } else {
+                reject(new Error(`git reset failed with code ${code}`));
+              }
+            });
+          });
+
+          commitPanel?.dispose();
+          vscode.window.showInformationMessage(
+            "Changes unstaged successfully!"
           );
         }
       },

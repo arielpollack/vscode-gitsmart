@@ -1,30 +1,46 @@
 {
-  "name": "smart-commit-extension",
-  "displayName": "Smart Commit",
+  "name": "gitsmart",
+  "displayName": "GitSmart",
   "version": "1.0.0",
-  "description": "VS Code extension for smart git commits with OpenAI integration",
+  "description": "Streamline your Git workflow with AI-powered smart staging, commit message generation, and enhanced code review outputs. Help teams ship code faster by automating Git operations and improving code review quality.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arielpollack/vscode-gitsmart.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "smart-commit.createCommit",
-        "title": "Smart Commit: Create Commit"
+        "command": "gitsmart.stageChanges",
+        "title": "GitSmart: Stage Changes"
       }
     ],
     "configuration": {
-      "title": "Smart Commit",
+      "title": "GitSmart",
       "properties": {
-        "smartCommit.openaiApiKey": {
+        "gitsmart.openaiApiKey": {
           "type": "string",
           "default": "",
           "description": "OpenAI API Key for generating commit messages"
+        },
+        "gitsmart.filterPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "console\\.log\\(",
+            "console\\.error\\(",
+            "console\\.warn\\(",
+          ],
+          "description": "Regular expressions for lines to filter out during staging (e.g., debug statements)"
         }
       }
     }
@@ -35,7 +51,8 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "pack": "vsce package"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",
