@@ -1,7 +1,7 @@
 {
   "name": "gitsmart",
   "displayName": "GitSmart",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Streamline your Git workflow with AI-powered smart staging, commit message generation, and enhanced code review outputs. Help teams ship code faster by automating Git operations and improving code review quality.",
   "license": "MIT",
   "publisher": "arielpollack",
