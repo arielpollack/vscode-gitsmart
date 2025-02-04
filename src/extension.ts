@@ -261,15 +261,15 @@ async function parseStagedDiffs(repo: GitRepository) {
   if (!stagedDiff) {
     return [];
   }
-
-  // Split the diff by file
-  const fileRegex = /^diff --git a\/(.*?) b\/(.*?)$/m;
-  const fileDiffs = stagedDiff.split("diff --git").filter(Boolean);
+  // Use regex with lookahead to ensure we only match actual diff headers
+  const diffSplitRegex = /(?=^diff --git a\/(.*?) b\/(.*?)$)/m;
+  const fileDiffs = stagedDiff
+    .split(diffSplitRegex)
+    .filter((str) => str.trim());
 
   const diffs = [];
   for (const fileDiff of fileDiffs) {
-    const fullDiff = "diff --git" + fileDiff;
-    const match = fileRegex.exec(fullDiff);
+    const match = diffSplitRegex.exec(fileDiff);
     if (match) {
       const filePath = match[2]; // Use the 'b' path as it represents the new file
       const fullFilePath = path.join(
@@ -277,7 +277,7 @@ async function parseStagedDiffs(repo: GitRepository) {
         filePath
       );
       diffs.push(
-        parseDiff(fullDiff, fullFilePath, getFileChangeType(fullDiff))
+        parseDiff(fileDiff, fullFilePath, getFileChangeType(fileDiff))
       );
     }
   }
@@ -433,8 +433,13 @@ function parseDiff(
   let currentLineNumber = 0;
 
   for (const line of lines) {
-    // Skip file header lines
-    if (line.startsWith("---") || line.startsWith("+++")) {
+    // Skip file header lines but preserve the diff header
+    if (
+      line.startsWith("diff --git") ||
+      line.startsWith("index ") ||
+      line.startsWith("new file") ||
+      line.startsWith("deleted file")
+    ) {
       continue;
     }
 
@@ -455,6 +460,7 @@ function parseDiff(
 
     if (!currentHunk) continue;
 
+    // Only process the line if it's a valid diff line
     if (line.startsWith("+")) {
       currentHunk.lines.push({
         type: "added",
@@ -468,9 +474,11 @@ function parseDiff(
         lineNumber: currentLineNumber, // Don't increment for removed lines
       });
     } else if (!line.startsWith("\\")) {
+      // Skip "\ No newline at end of file" markers
+      // Handle context lines (those starting with a space)
       currentHunk.lines.push({
         type: "context",
-        content: line.substring(1), // Remove the space at the start of context lines
+        content: line,
         lineNumber: currentLineNumber++,
       });
     }
