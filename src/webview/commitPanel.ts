@@ -204,32 +204,6 @@ export function getWebviewContent(
             <button class="action-button decline" id="declineButton">Decline and Reset</button>
         </div>
 
-        <script>
-            const commitPanelElement = document.body;
-            commitPanelElement.addEventListener('keydown', (event) => {
-                if (event.metaKey) {
-                    if (event.key === 'Enter') {
-                        document.getElementById('approveButton').click();
-                    } else if (event.key === 'Backspace') {
-                        document.getElementById('declineButton').click();
-                    }
-                }
-            });
-        </script>
-
-        <script>
-            // Add event listener for keydown
-            commitPanelElement.addEventListener('keydown', (event) => {
-                if (event.metaKey) {
-                    if (event.key === 'Enter') {
-                        approveCommit(); // Function to approve the commit
-                    } else if (event.key === 'Backspace') {
-                        declineCommit(); // Function to decline the commit
-                    }
-                }
-            });
-        </script>
-
         <script src="${scriptUri}"></script>
     </body>
     </html>`;

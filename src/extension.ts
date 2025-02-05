@@ -34,6 +34,7 @@ interface GitSmartConfig {
 }
 
 let commitPanel: vscode.WebviewPanel | undefined;
+let outputChannel: vscode.OutputChannel;
 
 async function getGitSmartConfig(): Promise<GitSmartConfig> {
   const config = vscode.workspace.getConfiguration("gitsmart");
@@ -72,7 +73,7 @@ async function handleSmartCommit(
   settings: GitSmartConfig,
   progress: vscode.Progress<{ message?: string; increment?: number }>
 ): Promise<void> {
-  progress.report({ message: 'Analyzing and staging changes...' });
+  progress.report({ message: "Analyzing and staging changes..." });
   await stageFilteredChanges(repo);
 
   const stagedDiff = await repo.diff(true);
@@ -81,37 +82,44 @@ async function handleSmartCommit(
     return;
   }
 
-  progress.report({ message: 'Processing diffs...' });
+  progress.report({ message: "Processing diffs..." });
   const diffs = await parseStagedDiffs(repo);
 
-  progress.report({ message: 'Generating commit message...' });
+  progress.report({ message: "Generating commit message..." });
   const commitMessage = await generateCommitMessage(
     repo,
     settings.openaiApiKey
   );
 
-  progress.report({ message: 'Opening commit panel...' });
+  progress.report({ message: "Opening commit panel..." });
   showCommitPanel(context, commitMessage, diffs);
 }
 
 export function activate(context: vscode.ExtensionContext) {
+
+  // Create output channel
+  outputChannel = vscode.window.createOutputChannel("GitSmart");
+  context.subscriptions.push(outputChannel);
 
   let disposable = vscode.commands.registerCommand(
     "gitsmart.stageChanges",
     async () => {
       const settings = await getGitSmartConfig();
       const repo = await getGitRepository();
-      
+
       if (!repo) return;
 
       try {
-        await vscode.window.withProgress({
-          location: vscode.ProgressLocation.Notification,
-          title: 'GitSmart',
-          cancellable: false
-        }, async (progress) => {
-          await handleSmartCommit(context, repo, settings, progress);
-        });
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "GitSmart",
+            cancellable: false,
+          },
+          async (progress) => {
+            await handleSmartCommit(context, repo, settings, progress);
+          }
+        );
       } catch (error: any) {
         console.error("Error:", error);
         vscode.window.showErrorMessage(`Error: ${error.message}`);
@@ -195,12 +203,36 @@ async function stageFilteredChanges(repo: GitRepository): Promise<void> {
           cwd: workspaceFolder,
         });
 
-        apply.on("error", reject);
+        let stderr = "";
+        apply.stderr.on("data", (data) => {
+          stderr += data.toString();
+        });
+
+        apply.on("error", (err) => {
+          const errorMsg = `Git apply spawn error: ${err.message}`;
+          outputChannel.appendLine(errorMsg);
+          outputChannel.show(true); // Show output panel
+          vscode.window.showErrorMessage(`Git apply error: ${err.message}`);
+          reject(err);
+        });
+
         apply.on("exit", (code) => {
           if (code === 0) {
             resolve();
           } else {
-            reject(new Error(`git apply failed with code ${code}`));
+            const errorMsg = `Git apply failed with code ${code}${
+              stderr ? `: ${stderr}` : ""
+            }`;
+            outputChannel.appendLine("=== Git Apply Error ===");
+            outputChannel.appendLine(errorMsg);
+            outputChannel.appendLine("\n=== Patch Content ===");
+            outputChannel.appendLine(filteredPatch);
+            outputChannel.appendLine("\n=== End Patch Content ===");
+            outputChannel.show(true); // Show output panel
+            vscode.window.showErrorMessage(errorMsg);
+            reject(
+              new Error("Git apply failed, check output panel for more details")
+            );
           }
         });
       });
@@ -448,6 +480,89 @@ interface WebviewMessage {
   commitMessage: string;
 }
 
+async function handleApproveCommand(
+  repo: GitRepository,
+  message: WebviewMessage
+): Promise<void> {
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "GitSmart",
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ message: "Committing changes..." });
+      await repo.commit(message.commitMessage);
+      commitPanel?.dispose();
+      vscode.window.showInformationMessage("Changes committed successfully!");
+    }
+  );
+}
+
+async function handleDeclineCommand(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const git = spawn("git", ["reset"], {
+      cwd: vscode.workspace.workspaceFolders?.[0].uri.fsPath,
+    });
+
+    git.on("error", reject);
+    git.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`git reset failed with code ${code}`));
+      }
+    });
+  });
+
+  commitPanel?.dispose();
+  vscode.window.showInformationMessage("Changes unstaged successfully!");
+}
+
+async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
+  const gitExtension = vscode.extensions.getExtension<GitAPI>("vscode.git");
+  if (!gitExtension) return;
+
+  const api = gitExtension.exports.getAPI(1);
+  const repo = api.repositories[0];
+
+  if (message.command === "approve") {
+    await handleApproveCommand(repo, message);
+  } else if (message.command === "decline") {
+    await handleDeclineCommand();
+  }
+}
+
+function createCommitPanel(
+  context: vscode.ExtensionContext
+): vscode.WebviewPanel {
+  const panel = vscode.window.createWebviewPanel(
+    "gitsmart",
+    "GitSmart",
+    vscode.ViewColumn.One,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    }
+  );
+
+  panel.webview.onDidReceiveMessage(
+    handleWebviewMessage,
+    undefined,
+    context.subscriptions
+  );
+
+  panel.onDidDispose(
+    () => {
+      commitPanel = undefined;
+    },
+    null,
+    context.subscriptions
+  );
+
+  return panel;
+}
+
 function showCommitPanel(
   context: vscode.ExtensionContext,
   commitMessage: string,
@@ -456,66 +571,7 @@ function showCommitPanel(
   if (commitPanel) {
     commitPanel.reveal(vscode.ViewColumn.One);
   } else {
-    commitPanel = vscode.window.createWebviewPanel(
-      "gitsmart",
-      "GitSmart",
-      vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-      }
-    );
-
-    // Handle messages from the webview
-    commitPanel.webview.onDidReceiveMessage(
-      async (message: WebviewMessage) => {
-        const gitExtension =
-          vscode.extensions.getExtension<GitAPI>("vscode.git");
-        if (!gitExtension) return;
-
-        const api = gitExtension.exports.getAPI(1);
-        const repo = api.repositories[0];
-
-        if (message.command === "approve") {
-          await repo.commit(message.commitMessage);
-          commitPanel?.dispose();
-          vscode.window.showInformationMessage(
-            "Changes committed successfully!"
-          );
-        } else if (message.command === "decline") {
-          // Reset the index (unstage all changes)
-          await new Promise<void>((resolve, reject) => {
-            const git = spawn("git", ["reset"], {
-              cwd: vscode.workspace.workspaceFolders?.[0].uri.fsPath,
-            });
-
-            git.on("error", reject);
-            git.on("exit", (code) => {
-              if (code === 0) {
-                resolve();
-              } else {
-                reject(new Error(`git reset failed with code ${code}`));
-              }
-            });
-          });
-
-          commitPanel?.dispose();
-          vscode.window.showInformationMessage(
-            "Changes unstaged successfully!"
-          );
-        }
-      },
-      undefined,
-      context.subscriptions
-    );
-
-    commitPanel.onDidDispose(
-      () => {
-        commitPanel = undefined;
-      },
-      null,
-      context.subscriptions
-    );
+    commitPanel = createCommitPanel(context);
   }
 
   const content = getWebviewContent(

@@ -19,6 +19,20 @@ class CommitPanel {
     document
       .getElementById("declineButton")
       .addEventListener("click", () => this.handleDecline());
+
+    // Handle keyboard shortcuts
+    document.addEventListener("keydown", (e) => {
+      if (e.metaKey) {
+        // cmd key on Mac
+        if (e.key === "Enter") {
+          e.preventDefault();
+          this.handleApprove();
+        } else if (e.key === "Backspace") {
+          e.preventDefault();
+          this.handleDecline();
+        }
+      }
+    });
   }
 
   handleToggleDiff(event) {
