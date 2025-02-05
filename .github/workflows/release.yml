@@ -1,0 +1,44 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for creating releases
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Update package.json version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          npm version $VERSION --no-git-tag-version
+          
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+        
+      - name: Package Extension
+        run: npm run package
+        
+      - name: Create ZIP archive
+        run: zip gitsmart-latest.zip gitsmart-latest.vsix
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/gitsmart-latest.zip
+            release/gitsmart-latest.vsix
+          generate_release_notes: true 
