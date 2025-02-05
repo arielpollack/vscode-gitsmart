@@ -39,6 +39,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            release/gitsmart-latest.zip
-            release/gitsmart-latest.vsix
+            gitsmart-latest.zip
+            gitsmart-latest.vsix
           generate_release_notes: true 
