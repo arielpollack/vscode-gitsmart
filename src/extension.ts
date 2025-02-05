@@ -53,22 +53,6 @@ export function activate(context: vscode.ExtensionContext) {
           config.get<string>("systemMessageEnhancement") || "",
       };
 
-      if (!settings.openaiApiKey) {
-        const setKeyAction = "Set API Key";
-        const result = await vscode.window.showErrorMessage(
-          "OpenAI API key is not configured. Please set it in the extension settings.",
-          setKeyAction
-        );
-
-        if (result === setKeyAction) {
-          await vscode.commands.executeCommand(
-            "workbench.action.openSettings",
-            "gitsmart.openaiApiKey"
-          );
-        }
-        return;
-      }
-
       const gitExtension = vscode.extensions.getExtension<GitAPI>("vscode.git");
       if (!gitExtension) {
         vscode.window.showErrorMessage("Git extension not found");
@@ -377,7 +361,23 @@ async function generateCommitMessage(
     } else {
       console.log("Error using VS Code Language Model:", err);
     }
-    // Fall through to OpenAI if VS Code's language model fails
+  }
+
+  // Check OpenAI API key only when falling back to OpenAI
+  if (!apiKey) {
+    const setKeyAction = "Set API Key";
+    const result = await vscode.window.showErrorMessage(
+      "VS Code language models are not available and OpenAI API key is not configured. Please set it in the extension settings.",
+      setKeyAction
+    );
+
+    if (result === setKeyAction) {
+      await vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "gitsmart.openaiApiKey"
+      );
+    }
+    return "feat: update codebase";
   }
 
   // Fallback to OpenAI
