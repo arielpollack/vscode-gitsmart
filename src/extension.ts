@@ -35,54 +35,83 @@ interface GitSmartConfig {
 
 let commitPanel: vscode.WebviewPanel | undefined;
 
+async function getGitSmartConfig(): Promise<GitSmartConfig> {
+  const config = vscode.workspace.getConfiguration("gitsmart");
+  return {
+    openaiApiKey: config.get<string>("openaiApiKey") || "",
+    filterPatterns: config.get<string[]>("filterPatterns") || [
+      "^\\s*console\\.(log|error|warn)\\(",
+      "^\\s*debugger;",
+    ],
+    systemMessageEnhancement:
+      config.get<string>("systemMessageEnhancement") || "",
+  };
+}
+
+async function getGitRepository(): Promise<GitRepository | null> {
+  const gitExtension = vscode.extensions.getExtension<GitAPI>("vscode.git");
+  if (!gitExtension) {
+    vscode.window.showErrorMessage("Git extension not found");
+    return null;
+  }
+
+  const api = gitExtension.exports.getAPI(1);
+  const repo = api.repositories[0];
+
+  if (!repo) {
+    vscode.window.showErrorMessage("No repository found");
+    return null;
+  }
+
+  return repo;
+}
+
+async function handleSmartCommit(
+  context: vscode.ExtensionContext,
+  repo: GitRepository,
+  settings: GitSmartConfig,
+  progress: vscode.Progress<{ message?: string; increment?: number }>
+): Promise<void> {
+  progress.report({ message: 'Analyzing and staging changes...' });
+  await stageFilteredChanges(repo);
+
+  const stagedDiff = await repo.diff(true);
+  if (!stagedDiff) {
+    vscode.window.showInformationMessage("No changes staged for commit");
+    return;
+  }
+
+  progress.report({ message: 'Processing diffs...' });
+  const diffs = await parseStagedDiffs(repo);
+
+  progress.report({ message: 'Generating commit message...' });
+  const commitMessage = await generateCommitMessage(
+    repo,
+    settings.openaiApiKey
+  );
+
+  progress.report({ message: 'Opening commit panel...' });
+  showCommitPanel(context, commitMessage, diffs);
+}
+
 export function activate(context: vscode.ExtensionContext) {
-  console.log("GitSmart extension is now active");
 
   let disposable = vscode.commands.registerCommand(
     "gitsmart.stageChanges",
     async () => {
-      // Update config retrieval
-      const config = vscode.workspace.getConfiguration("gitsmart");
-      const settings: GitSmartConfig = {
-        openaiApiKey: config.get<string>("openaiApiKey") || "",
-        filterPatterns: config.get<string[]>("filterPatterns") || [
-          "^\\s*console\\.(log|error|warn)\\(",
-          "^\\s*debugger;",
-        ],
-        systemMessageEnhancement:
-          config.get<string>("systemMessageEnhancement") || "",
-      };
-
-      const gitExtension = vscode.extensions.getExtension<GitAPI>("vscode.git");
-      if (!gitExtension) {
-        vscode.window.showErrorMessage("Git extension not found");
-        return;
-      }
-
-      const api = gitExtension.exports.getAPI(1);
-      const repo = api.repositories[0];
-
-      if (!repo) {
-        vscode.window.showErrorMessage("No repository found");
-        return;
-      }
+      const settings = await getGitSmartConfig();
+      const repo = await getGitRepository();
+      
+      if (!repo) return;
 
       try {
-        await stageFilteredChanges(repo);
-
-        const stagedDiff = await repo.diff(true);
-        if (!stagedDiff) {
-          vscode.window.showInformationMessage("No changes staged for commit");
-          return;
-        }
-
-        const diffs = await parseStagedDiffs(repo);
-        const commitMessage = await generateCommitMessage(
-          repo,
-          settings.openaiApiKey
-        );
-
-        showCommitPanel(context, commitMessage, diffs);
+        await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: 'GitSmart',
+          cancellable: false
+        }, async (progress) => {
+          await handleSmartCommit(context, repo, settings, progress);
+        });
       } catch (error: any) {
         console.error("Error:", error);
         vscode.window.showErrorMessage(`Error: ${error.message}`);
